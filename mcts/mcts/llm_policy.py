@@ -1,6 +1,6 @@
 from openai import OpenAI
 
-client = OpenAI(api_key="Your key")
+client = OpenAI()
 import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer
@@ -17,8 +17,9 @@ BETA = 0.3  # weighting coefficient used to rank generated samples
 LAMBDA = 0.5
 
 class LLMPolicy:
-    def __init__(self, device):
+    def __init__(self, device, model="DeepSeek-R1-Distill-Qwen-32B"):
         self.device = device
+        self.model = model
         self.sampling_params = \
             {
                 "max_tokens": 8,
@@ -156,13 +157,11 @@ class LLMPolicy:
         #     prompt=self.prompt + task,
         #     **self.sampling_params,
         # )
-        response = client.chat.completions.create(model="gpt-3.5-turbo",
-        # model = "gpt-4",
-        messages=[{
-            "role": "user",
-            "content": self.prompt + task,
-        }],
-        **self.sampling_params)
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": self.prompt + task}],
+            **self.sampling_params
+        )
         # print(task)
         # print(response['choices'][0]['message']['content'])
         generated_samples = [response.choices[i].message.content.split(", ") \

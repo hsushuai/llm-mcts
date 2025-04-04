@@ -5,3 +5,7 @@ tqdm
 sentence_transformers
 openai
 backoff
+httpx[socks]
+opencv-python
+anytree
+ray

@@ -1,6 +1,6 @@
 from openai import OpenAI
 
-client = OpenAI(api_key="Your Key")
+client = OpenAI()
 import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer
@@ -26,7 +26,7 @@ def completions_with_backoff(**kwargs):
     return client.chat.completions.create(**kwargs)
 
 class LLMPolicy:
-    def __init__(self, device, model='gpt-3.5-turbo-0125'):
+    def __init__(self, device, model='DeepSeek-R1-Distill-Qwen-32B'):
         self.device = device
         self.model = model
         self.sampling_params = \

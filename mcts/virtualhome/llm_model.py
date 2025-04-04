@@ -1,6 +1,6 @@
 from openai import OpenAI
 
-client = OpenAI(api_key="Your Key")
+client = OpenAI()
 import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer
@@ -20,7 +20,7 @@ BETA = 0.3  # weighting coefficient used to rank generated samples
 LAMBDA = 0.5
 
 class LLM_Model:
-    def __init__(self, device, model='gpt-3.5-turbo-0125'):
+    def __init__(self, device, model='DeepSeek-R1-Distill-Qwen-32B'):
         self.device = device
         self.model = model
         self.get_goal_sample_params = \
