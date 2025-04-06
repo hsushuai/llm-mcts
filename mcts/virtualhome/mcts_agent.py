@@ -10,6 +10,7 @@ import pickle
 import argparse
 import time
 import copy
+from mcts.virtualhome.utils import kill_port
 
 def clean_graph(state, goal_spec, last_opened):
     new_graph = {}
@@ -85,7 +86,7 @@ class mcts_vh_env:
         self.task_goal = task_goal
         self.vh_pyenv.pomdp = True
         self.model = None
-        self.env_task_set = pickle.load(open('./vh/dataset/env_task_set_3_simple.pik', 'rb'))
+        self.env_task_set = pickle.load(open('./vh/dataset/env_task_set_500_simple.pik', 'rb'))
         self.history = []
         self.init_history = []
         self.cur_state_graph = graph
@@ -322,7 +323,8 @@ def parse_args():
     parser.add_argument('--load_path', default=None, type=str)
     parser.add_argument('--batch_size', default=128, type=int)
     parser.add_argument('--evaluate', default=True)
-    parser.add_argument('--model', default="gpt-3.5-turbo-0125", type=str)
+    parser.add_argument('--model', default="DeepSeek-R1-Distill-Qwen-32B", type=str)
+    parser.add_argument('--seed', default=0, type=int)
     return parser.parse_args()
 
 def find_test_data_file_path(args):
@@ -347,14 +349,17 @@ def test():
                     'no_graphics': True
     }
     llm_model = LLM_Model("cuda:0", args.model)
-    vhenv = UnityEnvironment(num_agents=1,
-                                max_episode_length=100,
-                                port_id=2,
-                                env_task_set=env_task_set,
-                                observation_types=["partial"],
-                                use_editor=False,
-                                executable_args=executable_args,
-                                base_port=8084)
+    kill_port(8086)  # ensure the port is free
+    vhenv = UnityEnvironment(
+        num_agents=1,
+        max_episode_length=100,
+        port_id=2,
+        env_task_set=env_task_set,
+        observation_types=["partial"],
+        use_editor=False,
+        executable_args=executable_args,
+        base_port=8084
+    )
     goal_spec = vhenv.get_goal(vhenv.task_goal[0], vhenv.agent_goals[0])
     graph = vhenv.get_graph()
     container_name2id = {}
@@ -411,7 +416,7 @@ def test():
             graph = vhenv.get_graph()
             plate_ids = []
 
-            obs, reward, done, info, success = vhenv.step({0: action})
+            obs, reward, done, info = vhenv.step({0: action})
             agent.env.update_(action, obs[0]) 
             valid_actions = agent.env.get_valid_action(obs)
             history.append(action)
@@ -421,8 +426,9 @@ def test():
         total += 1
         agent.root = None
         agent.state_dict = {}
-        time.sleep(5)
+        # time.sleep(5)
         print("succ rate: ", succ / total)
+
 
 if __name__ == "__main__" :
     test()

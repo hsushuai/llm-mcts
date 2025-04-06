@@ -162,5 +162,6 @@ cython_debug/
 logs/
 vh/
 tmp/
-expert_actions/expert**
+expert_actions/
 port**.txt
+data/

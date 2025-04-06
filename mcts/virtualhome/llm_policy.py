@@ -14,6 +14,8 @@ from mcts.virtualhome.expert_data import get_action_list_valid
 import time
 import backoff
 import openai as openai_api
+import concurrent.futures
+import copy
 
 MAX_STEPS = 20  # maximum number of steps to be generated
 CUTOFF_THRESHOLD = 0.8  # early stopping threshold based on matching score and likelihood score
@@ -21,9 +23,6 @@ P = 0.5  # hyperparameter for early stopping heuristic to detect whether Plannin
 BETA = 0.3  # weighting coefficient used to rank generated samples
 LAMBDA = 0.5
 
-@backoff.on_exception(backoff.expo, openai_api.OpenAIError)
-def completions_with_backoff(**kwargs):
-    return client.chat.completions.create(**kwargs)
 
 class LLMPolicy:
     def __init__(self, device, model='DeepSeek-R1-Distill-Qwen-32B'):
@@ -245,20 +244,47 @@ Do not generate repeated or looped actions. You must interact with objects that 
         # print(observation)
         prompt = self.construct_prompt(action, observation, task, most_similar_obs_idx)
         return prompt
+    
 
+    def _call_llm(self, **kwargs):
+        while True:
+            try:
+                response = client.chat.completions.create(**kwargs)
+                return response
+            except Exception:
+                continue
+    
+    def _concurrent_call_llm(self, **kwargs):
+        """Concurrently request the local llm to achieve n sampling."""
+        with concurrent.futures.ThreadPoolExecutor(max_workers=kwargs['n']) as executor:
+            futures = [executor.submit(self._call_llm, **kwargs) for _ in range(kwargs['n'])]
+            results = [future.result() for future in concurrent.futures.as_completed(futures)]
+        response = copy.copy(results[0])
+        response.choices = []
+        for r in results:
+            # remove think content
+            r.choices[0].message.content = r.choices[0].message.content.split("</think>")[1].strip() \
+                if "</think>" in r.choices[0].message.content else r.choices[0].message.content
+            # merge n sampling
+            response.choices.append(r.choices[0])
+        return response
+
+    def _query_llm(self, **kwargs):
+        if "gpt" in self.model:
+            return self._call_llm(**kwargs)
+        else:
+            return self._concurrent_call_llm(**kwargs)
 
     def query_llm(self, task, ins, curr_obs, k=3):
         prompt = self.get_prompt_examples(ins, curr_obs, k)
         if prompt + task in self.prompt_buffer:
             return self.prompt_buffer[prompt + task]
         else:
-            response = completions_with_backoff(model=self.model,
-            timeout=5,
-            messages=[{
-                "role": "system",
-                "content": prompt + task,
-            }],
-            **self.sampling_params)
+            response = self._query_llm(
+                model=self.model,
+                messages=[{"role": "system", "content": prompt + task}],
+                **self.sampling_params
+            )
             generated_samples = [response.choices[i].message.content.split(", ") \
                 for i in range(self.sampling_params['n'])]
             self.prompt_buffer[prompt + task] = generated_samples
@@ -323,7 +349,7 @@ Do not generate repeated or looped actions. You must interact with objects that 
         #         emperical_prob.append(LAMBDA * action_count[action] / len(samples) + (1-LAMBDA) /len(valid_action_list))
         #     else:
         #         emperical_prob.append((1-LAMBDA) / len(valid_action_list))
-        return emperical_prob # , pred_value
+        return emperical_prob, pred_value
 
     def calculate_emperical_prob(self, history, observation, valid_action_list, instruction, done_reward, step_reward, discount_factor):
     # def act(self, history, observation, valid_action_list, instruction):

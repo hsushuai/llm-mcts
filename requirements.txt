@@ -9,3 +9,5 @@ httpx[socks]
 opencv-python
 anytree
 ray
+profilehooks
+gym

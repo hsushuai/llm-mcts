@@ -1,4 +1,6 @@
 from openai import OpenAI
+import copy
+import re
 
 client = OpenAI()
 import numpy as np
@@ -12,6 +14,7 @@ import random
 import pickle
 from mcts.virtualhome.expert_data import get_action_list_valid
 import time
+import concurrent.futures
 
 MAX_STEPS = 20  # maximum number of steps to be generated
 CUTOFF_THRESHOLD = 0.8  # early stopping threshold based on matching score and likelihood score
@@ -25,24 +28,24 @@ class LLM_Model:
         self.model = model
         self.get_goal_sample_params = \
             {
-                "max_tokens": 32,
+                # "max_tokens": 32,
                 "temperature": 0.5,
                 "top_p": 0.9,
                 "n": 1,
                 "presence_penalty": 0.5,
                 "frequency_penalty": 0.3,
-                "stop": ['\n']
+                # "stop": ['\n']
             }
         
         self.sampling_params = \
             {
-                "max_tokens": 32,
+                # "max_tokens": 32,
                 "temperature": 0.5,
                 "top_p": 0.9,
                 "n": 50,
                 "presence_penalty": 0.5,
                 "frequency_penalty": 0.3,
-                "stop": ['\n']
+                # "stop": ['\n']
             }
         
         self.prompt_furniture_begin = """Generate one most possible position of the objects in the scene. The objects should be placed INSIDE a room.
@@ -292,95 +295,90 @@ Now, answer the following questions:\n
     def query_llm_goal(self, ins):
         try_times = 0
         while 1:
-            try: 
-                response = client.chat.completions.create(model=self.model,
-                # model = "gpt-4",
-                messages=[{
-                    "role": "system",
-                    # "content": self.prompt_furniture_begin,
-                    "content": self.lang_prompt,
-                },
-                {
-                    "role": "user",
-                    "content": f"Goal: {ins}.\nFormal goal: ",
-                }
-                ],
-                **self.get_goal_sample_params)
+            try:
+                response = self._query_llm(f"Goal: {ins}.\nFormal goal: ", self.lang_prompt, **self.get_goal_sample_params)
                 break
             except:
                 try_times += 1
                 time.sleep(5)
             if try_times >= 10:
                 return None
-        # print(task)
-        # print(response['choices'][0]['message']['content'])
-        generated_samples = response.choices[0].message.content.split("-") 
-        # print(generated_samples)
-        # generated_samples = [response['choices'][i]['text'].split("\n")[0] for i in range(self.sampling_params['n'])]
-            # calculate mean log prob across tokens
-        # mean_log_probs = [np.mean(response['choices'][i]['logprobs']['token_logprobs']) 
-                        #   for i in range(self.sampling_params['n'])]
+        generated_samples = response.choices[0].message.content.split("-")
         subgoals = []
         for subgoal in generated_samples:
-            subgoal = subgoal.replace('(', '').replace(')', '')
+            subgoal = re.search(r'\((.*?)\)', subgoal).group(1)
             subgoal = subgoal.split(',')
             subgoal[0] = subgoal[0].strip()
             subgoal[1] = subgoal[1].strip()
             subgoal[2] = subgoal[2].strip()
-            subgoal[3] = int(subgoal[3].strip())
+            subgoal[3] = int(subgoal[3])
             subgoals.append([subgoal[0], subgoal[1], subgoal[2], subgoal[3]])
         return subgoals
+    
 
+    def _call_llm(self, user, system, **sampling_params):
+        while True:
+            try:
+                response = client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user}
+                    ],
+                    **sampling_params
+                )
+                return response
+            except Exception:
+                continue
+    
+    def _concurrent_call_llm(self, user, system, **sampling_params):
+        """Concurrently request the local llm to achieve n sampling."""
+        with concurrent.futures.ThreadPoolExecutor(max_workers=sampling_params['n']) as executor:
+            futures = [executor.submit(self._call_llm, user, system, **sampling_params) for _ in range(sampling_params['n'])]
+            results = [future.result() for future in concurrent.futures.as_completed(futures)]
+        response = copy.copy(results[0])
+        response.choices = []
+        for r in results:
+            # remove think content
+            r.choices[0].message.content = r.choices[0].message.content.split("</think>")[1].strip() \
+                if "</think>" in r.choices[0].message.content else r.choices[0].message.content
+            # merge n sampling
+            response.choices.append(r.choices[0])
+        return response
+
+    def _query_llm(self, user, system, **sampling_params):
+        if "gpt" in self.model:
+            return self._call_llm(user, system, **sampling_params)
+        else:
+            return self._concurrent_call_llm(user, system, **sampling_params)
     
     def query_llm(self, task, ins, curr_obs, k=3):
-        # response = openai.chatcompletion.create(
-        #     model="gpt-3.5-turbo",
-        #     prompt=self.prompt + task,
-        #     **self.sampling_params,
-        # )
-        # prompt = self.get_prompt_examples(ins, curr_obs, k)
-        # print(prompt + task)
-        print(task)
+        # print(task, flush=True)
         try_times = 0
         while 1:
-            try: 
-                response = client.chat.completions.create(model=self.model,
-                # model = "gpt-4",
-                messages=[{
-                    "role": "system",
-                    # "content": self.prompt_furniture_begin,
-                    "content": self.prompt_begin,
-                },
-                {
-                    "role": "user",
-                    "content": task,
-                }
-                ],
-                **self.sampling_params)
+            try:
+                response = self._query_llm(task, self.prompt_begin, **self.sampling_params)
                 break
-            except:
+            except Exception as e:
+                print(f"Error: {e}", flush=True)
                 try_times += 1
-                time.sleep(5)
+                time.sleep(1)
             if try_times >= 10:
                 return None
-        # print(task)
-        # print(response['choices'][0]['message']['content'])
-        generated_samples = [response.choices[i].message.content.split(",") \
-            for i in range(self.sampling_params['n'])]
-        # print(generated_samples)
-        # generated_samples = [response['choices'][i]['text'].split("\n")[0] for i in range(self.sampling_params['n'])]
-            # calculate mean log prob across tokens
-        # mean_log_probs = [np.mean(response['choices'][i]['logprobs']['token_logprobs']) 
-                        #   for i in range(self.sampling_params['n'])]
+        generated_samples = [
+            [s.strip() for s in response.choices[i].message.content.split(",")]
+            for i in range(self.sampling_params['n'])
+        ]
         samples = []
         for generated_sample in generated_samples:
             for sample in generated_sample:
+                sample = sample.split('Answer: ')[1] if 'Answer: ' in sample else sample
                 sample_ = sample.split(' ')
                 if '' in sample_:
                     sample_.remove('')
-                if len(sample_) != 2:
+                if len(sample_) > 2:
                     samples.append([sample_[0], sample_[1] + ' ' + sample_[2]])
-                samples.append(sample_) 
+                samples.append(sample_)
         return samples
 
     def construct_house_model(self):
@@ -392,18 +390,14 @@ Now, answer the following questions:\n
         for object in self.grabable_list:
             samples = self.query_llm(f"Question: What is the most possible position of {object}?\nAnswer: ", "", "", 1)
             object_positions[object] = samples
-            # print(object_positions[object])
-        # print(object_positions)   
-
-        # save samples
+            print(f"sampled {object} ({len(object_positions)}/{len(self.grabable_list)}) position", flush=True)
         json.dump(object_positions, open("./data/object_all_positions.json", "w"))
+        
         object_positions = {}
         for object in self.furniture_list:
             samples = self.query_llm(f"Question: What is the most possible position of {object}?\nAnswer: ", "", "", 1)
             object_positions[object] = samples
-            # print(object_positions[object])
-        # print(object_positions)   
-        # save samples
+            print(f"sampled {object} ({len(object_positions)}/{len(self.furniture_list)}) position", flush=True)
         json.dump(object_positions, open("./data/furniture_all_positions.json", "w"))
 
     def call(self, request, response):
@@ -539,8 +533,7 @@ Now, answer the following questions:\n
                 if rel not in ['INSIDE', 'ON']:
                     continue
                 else:
-                    similar_obj_idx = self.find_most_similar(obj, self.room_embedding) 
-                    # similar_obj_idx = self.find_most_similar(obj, self.position_list_embedding) 
+                    similar_obj_idx = self.find_most_similar(obj, self.room_embedding)
                     position_obj = self.room_list[similar_obj_idx]
                     if key not in data_new:
                         data_new[key] = {}
@@ -552,7 +545,6 @@ Now, answer the following questions:\n
         for key, value in data_new.items():
             data_save[key] = [(ele[0], ele[1], value[ele]) for ele in value]
         json.dump(data_save, open(goal_path, 'w'))
-        print(data_save)
 
 if __name__ == '__main__':
     llm_agent = LLM_Model("cuda:0")
